@@ -251,29 +251,29 @@ async def on_ready() -> None:
 @bot.command(name="helpmod")
 async def helpmod(ctx: commands.Context) -> None:
     embed = discord.Embed(title="Comandos de Moderación y Seguridad", color=discord.Color.blurple())
-    embed.description = (
-        "`!ban @user [razon]`\n"
-        "`!kick @user [razon]`\n"
-        "`!mute @user <minutos> [razon]`\n"
-        "`!unmute @user [razon]`\n"
-        "`!warn @user [razon]`\n"
-        "`!warnings @user`\n"
-        "`!clearwarns @user`\n"
-        "`!purge <cantidad>`\n"
-        "`!setup_proteccion` / `!estado_proteccion`\n"
-        "`!config_spam <msg> <seg> <accion>`\n"
-        "`!config_spam_tiempos <timeout_min> <tempban_min>`\n"
-        "`!config_mentions <max> <accion> <timeout_min>`\n"
-        "`!config_automod <links:true|false> <invites:true|false> <caps%> <accion>`\n"
-        "`!config_raid <joins> <seg> <lockdown>`\n"
-        "`!config_nuke <acciones> <seg> <accion>`\n"
-        "`!config_warns <umbral> <accion> <timeout_min>`\n"
-        "`!set_log <#canal>`\n"
-        "`!setup_verificacion <@rol> <#canal> [expira_min]`\n"
-        "`!verificar <codigo>`\n"
-        "`!emergencia on|off`\n"
-        "`!ping`, `!userinfo [@user]`, `!serverinfo`"
-    )
+    embed.description = """`!ban @user [razon]`
+`!unban <user_id> [razon]`
+`!kick @user [razon]`
+`!mute @user <minutos> [razon]`
+`!unmute @user [razon]`
+`!warn @user [razon]`
+`!warnings @user`
+`!clearwarns @user`
+`!purge <cantidad>`
+`!setup_proteccion` / `!estado_proteccion`
+`!config_spam <msg> <seg> <accion>`
+`!config_spam_tiempos <timeout_min> <tempban_min>`
+`!config_mentions <max> <accion> <timeout_min>`
+`!config_automod <links:true|false> <invites:true|false> <caps%> <accion>`
+`!config_raid <joins> <seg> <lockdown>`
+`!config_nuke <acciones> <seg> <accion>`
+`!config_warns <umbral> <accion> <timeout_min>`
+`!set_log <#canal>`
+`!setup_verificacion <@rol> <#canal> [expira_min]`
+`!verificar <codigo>`
+`!reenviar_captcha`
+`!emergencia on|off`
+`!ping`, `!userinfo [@user]`, `!serverinfo`"""
     await ctx.send(embed=embed)
 
 
@@ -507,6 +507,38 @@ async def verificar(ctx: commands.Context, codigo: str) -> None:
         await ctx.send("⚠️ No tengo permisos para asignarte el rol.")
 
 
+
+
+@bot.command(name="reenviar_captcha")
+async def reenviar_captcha(ctx: commands.Context) -> None:
+    if not ctx.guild or not isinstance(ctx.author, discord.Member):
+        return
+
+    cfg = get_guild_settings(ctx.guild.id)
+    if not cfg["verification"]["enabled"]:
+        await ctx.send("ℹ️ La verificación no está activada en este servidor.")
+        return
+
+    key = (ctx.guild.id, ctx.author.id)
+    pending = verification_pending.get(key)
+    if not pending:
+        await ctx.send("❌ No tienes captcha pendiente o ya expiró.")
+        return
+
+    if time.time() > pending["expires_at"]:
+        verification_pending.pop(key, None)
+        await ctx.send("❌ Tu captcha expiró. Espera a que se genere uno nuevo.")
+        return
+
+    try:
+        await ctx.author.send(
+            f"🔐 Tu código de verificación para **{ctx.guild.name}** es: **{pending['code']}**\n"
+            "Ejecuta en el servidor: `!verificar <codigo>`."
+        )
+        await ctx.send("✅ Te reenvié el captcha por mensaje privado.")
+    except discord.Forbidden:
+        await ctx.send("⚠️ No pude enviarte DM. Activa mensajes directos del servidor.")
+
 @bot.command(name="emergencia")
 @commands.has_guild_permissions(manage_guild=True)
 async def emergencia(ctx: commands.Context, estado: str) -> None:
@@ -529,6 +561,20 @@ async def ban_member(ctx: commands.Context, member: discord.Member, *, reason: s
     await ctx.send(f"🔨 {member} baneado. Razón: {reason}")
     await log_mod(ctx.guild, f"🔨 {member} baneado por {ctx.author}. Razón: {reason}")
 
+
+
+
+@bot.command(name="unban")
+@commands.has_guild_permissions(ban_members=True)
+async def unban_member(ctx: commands.Context, user_id: int, *, reason: str = "Sin razón") -> None:
+    try:
+        await ctx.guild.unban(discord.Object(id=user_id), reason=f"{reason} | por {ctx.author}")
+        await ctx.send(f"✅ Usuario `{user_id}` desbaneado. Razón: {reason}")
+        await log_mod(ctx.guild, f"✅ Usuario `{user_id}` desbaneado por {ctx.author}. Razón: {reason}")
+    except discord.NotFound:
+        await ctx.send("❌ Ese usuario no está baneado o el ID es inválido.")
+    except discord.Forbidden:
+        await ctx.send("⚠️ No tengo permisos para desbanear usuarios.")
 
 @bot.command(name="kick")
 @commands.has_guild_permissions(kick_members=True)
@@ -665,13 +711,32 @@ async def on_member_join(member: discord.Member) -> None:
             "expires_at": expiration,
         }
 
+        expire_minutes = _safe_int(cfg["verification"].get("captcha_expire_minutes"), 15)
+        dm_sent = False
+        try:
+            await member.send(
+                f"👋 Bienvenido a **{member.guild.name}**\n"
+                f"Tu código de verificación es: **{code}**\n"
+                f"Ejecuta en el servidor: `!verificar {code}`\n"
+                f"⏳ Expira en {expire_minutes} minutos."
+            )
+            dm_sent = True
+        except discord.Forbidden:
+            dm_sent = False
+
         verification_channel_id = _safe_int(cfg["verification"].get("channel_id"), 0)
         channel = member.guild.get_channel(verification_channel_id)
         if isinstance(channel, discord.TextChannel):
-            await channel.send(
-                f"👋 {member.mention}, para verificarte escribe en este servidor: `!verificar {code}`\n"
-                f"⏳ Este código expira en {_safe_int(cfg['verification'].get('captcha_expire_minutes'), 15)} minutos."
-            )
+            if dm_sent:
+                await channel.send(
+                    f"📩 {member.mention} te envié la verificación por DM. "
+                    "Usa el código recibido con `!verificar <codigo>`."
+                )
+            else:
+                await channel.send(
+                    f"⚠️ {member.mention}, no pude enviarte DM. "
+                    "Activa MD de servidor y escribe `!reenviar_captcha` para recibir tu código en privado."
+                )
 
 
 @bot.event
@@ -808,8 +873,10 @@ async def handle_nuke_event(guild: discord.Guild, action_type: discord.AuditLogA
 @config_nuke.error
 @config_warns.error
 @setup_verificacion.error
+@reenviar_captcha.error
 @emergencia.error
 @ban_member.error
+@unban_member.error
 @kick_member.error
 @mute_member.error
 @unmute_member.error

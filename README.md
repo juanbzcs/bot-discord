@@ -12,7 +12,7 @@ Bot de moderación avanzada para Discord, inspirado en herramientas tipo Carl-bo
   - control de exceso de mayúsculas
 - ✅ Anti-raid por oleada de entradas + **modo emergencia (lockdown)** automático.
 - ✅ Anti-nuke por auditoría (borrado de canales/roles) con baneo/expulsión automática.
-- ✅ Verificación por captcha simple con comando `!verificar <codigo>`.
+- ✅ Verificación por captcha privado por DM (solo lo ve el usuario) con `!verificar <codigo>`.
 - ✅ Comandos de moderación manual: `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!purge`.
 - ✅ Sistema de warns con escalado automático configurable.
 - ✅ Logs de moderación en canal configurable.
@@ -77,11 +77,13 @@ python bot.py
 - `!config_nuke <acciones> <ventana_segundos> <accion>`
 - `!config_warns <umbral> <accion> <timeout_minutos>`
 - `!setup_verificacion <@rol_verificado> <#canal_verificacion> [expira_minutos]`
+- `!reenviar_captcha`
 - `!emergencia on|off`
 
 ### Moderación manual
 
 - `!ban @usuario [razon]`
+- `!unban <user_id> [razon]`
 - `!kick @usuario [razon]`
 - `!mute @usuario <minutos> [razon]`
 - `!unmute @usuario [razon]`
@@ -93,6 +95,7 @@ python bot.py
 ### Verificación
 
 - `!verificar <codigo>`
+- `!reenviar_captcha`
 
 ### Utilidad
 
@@ -116,4 +119,5 @@ python bot.py
 
 - El bot excluye owner/admin de sanciones automáticas.
 - `tempban` se gestiona con un worker interno que revisa expiraciones y desbanea automáticamente.
+- El código de verificación se envía por DM al usuario (no se publica en canal).
 - Para producción, prueba primero en servidor de staging.
