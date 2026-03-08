@@ -138,3 +138,21 @@ python bot.py
 - `tempban` se gestiona con un worker interno que revisa expiraciones y desbanea automáticamente.
 - La verificación se envía en un hilo privado dentro del canal de verificación (no visible para todo el servidor).
 - Para producción, prueba primero en servidor de staging.
+
+## Deploy en Render
+
+Puedes correrlo en Render como **Web Service** (incluye `webserver.py` para mantener puerto abierto) o como **Background Worker**.
+
+### Opción recomendada (Worker)
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `python bot.py`
+
+### Opción Web Service
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `python bot.py`
+- El archivo `webserver.py` levanta Flask en `PORT` automáticamente para que Render mantenga el servicio activo.
+
+### Variables de entorno en Render
+- `DISCORD_TOKEN` = token real del bot
+- `BOT_PREFIX` = `!` (o el prefijo que quieras)
+

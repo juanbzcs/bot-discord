@@ -14,6 +14,11 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+try:
+    from webserver import keep_alive
+except Exception:
+    keep_alive = None
+
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -1250,4 +1255,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if keep_alive:
+        keep_alive()
     asyncio.run(main())
