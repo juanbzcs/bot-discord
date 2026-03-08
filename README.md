@@ -13,6 +13,9 @@ Bot de moderación avanzada para Discord, inspirado en herramientas tipo Carl-bo
 - ✅ Anti-raid por oleada de entradas + **modo emergencia (lockdown)** automático.
 - ✅ Anti-nuke por auditoría (borrado de canales/roles) con baneo/expulsión automática.
 - ✅ Verificación en canal mediante hilo privado (solo lo ve ese usuario) con `!verificar <codigo>`.
+- ✅ Autorole configurable al ingresar (`!set_autorole`, `!clear_autorole`).
+- ✅ Gestión de roles masiva/manual (`!roleadd`, `!roleremove`, incluyendo `all`).
+- ✅ Sistema de blacklist con acción al entrar (`kick`, `ban` o `none`) y comando `!checkuser`.
 - ✅ Comandos de moderación manual: `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!purge`.
 - ✅ Sistema de warns con escalado automático configurable.
 - ✅ Logs de moderación en canal configurable.
@@ -69,6 +72,14 @@ python bot.py
 - `!setup_proteccion`
 - `!estado_proteccion`
 - `!set_log #canal`
+- `!set_join_alert #canal`
+- `!set_autorole @rol`
+- `!clear_autorole`
+- `!blacklist_add <user_id|@usuario>`
+- `!blacklist_remove <user_id|@usuario>`
+- `!blacklist_list`
+- `!blacklist_action <kick|ban|none>`
+- `!checkuser <user_id|@usuario>`
 - `!config_spam <mensajes> <ventana_segundos> <accion>`
 - `!config_spam_tiempos <timeout_minutos> <tempban_minutos>`
 - `!config_mentions <max_menciones> <accion> <timeout_minutos>`
@@ -85,6 +96,8 @@ python bot.py
 - `!ban @usuario [razon]`
 - `!unban <user_id> [razon]`
 - `!kick @usuario [razon]`
+- `!roleadd @rol <@usuario|all>`
+- `!roleremove @rol <@usuario|all>`
 - `!mute @usuario <minutos> [razon]`
 - `!unmute @usuario [razon]`
 - `!warn @usuario [razon]`

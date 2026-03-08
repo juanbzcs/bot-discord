@@ -65,9 +65,15 @@ DEFAULT_SETTINGS = {
     },
     "moderation": {
         "log_channel_id": 0,
+        "join_alert_channel_id": 0,
         "warn_threshold": 3,
         "warn_action": "timeout",  # timeout | kick | ban
         "warn_timeout_minutes": 60,
+    },
+    "access": {
+        "autorole_id": 0,
+        "blacklist_user_ids": [],
+        "blacklist_action": "kick",  # kick | ban | none
     },
     "emergency_mode": False,
     "tempbans": [],
@@ -119,7 +125,7 @@ def get_guild_settings(guild_id: int) -> dict[str, Any]:
         save_settings(settings)
     merged = deepcopy(DEFAULT_SETTINGS)
     merged.update(settings[gid])
-    for key in ["spam", "mentions", "automod", "raid", "nuke", "verification", "moderation"]:
+    for key in ["spam", "mentions", "automod", "raid", "nuke", "verification", "moderation", "access"]:
         if isinstance(settings[gid].get(key), dict):
             merged[key].update(settings[gid][key])
     return merged
@@ -154,6 +160,54 @@ async def log_mod(guild: discord.Guild, message: str) -> None:
             await channel.send(message)
         except discord.Forbidden:
             return
+
+
+def parse_user_id(raw: str) -> int:
+    cleaned = raw.strip().replace("<@", "").replace("!", "").replace(">", "")
+    return _safe_int(cleaned, 0)
+
+
+def get_shared_guilds(user_id: int) -> list[tuple[discord.Guild, discord.Member]]:
+    shared: list[tuple[discord.Guild, discord.Member]] = []
+    for guild in bot.guilds:
+        member = guild.get_member(user_id)
+        if member:
+            shared.append((guild, member))
+    return shared
+
+
+async def send_join_alert(member: discord.Member, cfg: dict[str, Any]) -> None:
+    channel_id = _safe_int(cfg["moderation"].get("join_alert_channel_id"), 0)
+    if not channel_id:
+        return
+
+    channel = member.guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    shared = get_shared_guilds(member.id)
+    created = discord.utils.format_dt(member.created_at, "F")
+    created_rel = discord.utils.format_dt(member.created_at, "R")
+
+    lines = []
+    for guild, shared_member in shared[:10]:
+        joined = discord.utils.format_dt(shared_member.joined_at, "R") if shared_member.joined_at else "desconocido"
+        lines.append(f"• {guild.name} (joined {joined})")
+    shared_text = "\n".join(lines) if lines else "Sin servidores compartidos detectados."
+
+    embed = discord.Embed(title="🔎 Check de ingreso", color=discord.Color.orange())
+    embed.add_field(name="Usuario", value=f"{member} (`{member.id}`)", inline=False)
+    embed.add_field(name="Cuenta creada", value=f"{created}\n{created_rel}", inline=False)
+    embed.add_field(name="Servidores compartidos", value=str(len(shared)), inline=True)
+    embed.add_field(name="Entra a este server", value=discord.utils.format_dt(discord.utils.utcnow(), "R"), inline=True)
+    embed.add_field(name="Detalle de servidores", value=shared_text[:1024], inline=False)
+    if member.display_avatar:
+        embed.set_thumbnail(url=member.display_avatar.url)
+
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        return
 
 
 async def apply_action(member: discord.Member, cfg: dict[str, Any], action: str, reason: str) -> str:
@@ -254,6 +308,9 @@ async def helpmod(ctx: commands.Context) -> None:
     embed = discord.Embed(title="Comandos de Moderación y Seguridad", color=discord.Color.blurple())
     embed.description = """`!ban @user [razon]`
 `!unban <user_id> [razon]`
+`!roleadd <@rol> <@user|all>`
+`!roleremove <@rol> <@user|all>`
+`!set_autorole <@rol>` / `!clear_autorole`
 `!kick @user [razon]`
 `!mute @user <minutos> [razon]`
 `!unmute @user [razon]`
@@ -270,6 +327,10 @@ async def helpmod(ctx: commands.Context) -> None:
 `!config_nuke <acciones> <seg> <accion>`
 `!config_warns <umbral> <accion> <timeout_min>`
 `!set_log <#canal>`
+`!set_join_alert <#canal>`
+`!blacklist_add <user_id|@user>` / `!blacklist_remove <user_id|@user>`
+`!blacklist_list` / `!blacklist_action <kick|ban|none>`
+`!checkuser <user_id|@user>`
 `!setup_verificacion <@rol> <#canal> [expira_min]`
 `!verificar <codigo>`
 `!reenviar_captcha`
@@ -306,6 +367,195 @@ async def estado_proteccion(ctx: commands.Context) -> None:
 async def set_log(ctx: commands.Context, canal: discord.TextChannel) -> None:
     update_guild_settings(ctx.guild.id, {"moderation": {"log_channel_id": canal.id}})
     await ctx.send(f"✅ Canal de logs configurado: {canal.mention}")
+
+
+@bot.command(name="set_join_alert")
+@commands.has_guild_permissions(manage_guild=True)
+async def set_join_alert(ctx: commands.Context, canal: discord.TextChannel) -> None:
+    update_guild_settings(ctx.guild.id, {"moderation": {"join_alert_channel_id": canal.id}})
+    await ctx.send(f"✅ Canal de alertas de ingreso configurado: {canal.mention}")
+
+
+@bot.command(name="set_autorole")
+@commands.has_guild_permissions(manage_roles=True)
+async def set_autorole(ctx: commands.Context, rol: discord.Role) -> None:
+    update_guild_settings(ctx.guild.id, {"access": {"autorole_id": rol.id}})
+    await ctx.send(f"✅ Autorole configurado: {rol.mention}")
+
+
+@bot.command(name="clear_autorole")
+@commands.has_guild_permissions(manage_roles=True)
+async def clear_autorole(ctx: commands.Context) -> None:
+    update_guild_settings(ctx.guild.id, {"access": {"autorole_id": 0}})
+    await ctx.send("✅ Autorole desactivado.")
+
+
+@bot.command(name="blacklist_add")
+@commands.has_guild_permissions(manage_guild=True)
+async def blacklist_add(ctx: commands.Context, user_ref: str) -> None:
+    user_id = parse_user_id(user_ref)
+    if not user_id:
+        await ctx.send("❌ ID inválido. Usa un ID o mención de usuario.")
+        return
+
+    cfg = get_guild_settings(ctx.guild.id)
+    listed = [int(x) for x in cfg["access"].get("blacklist_user_ids", [])]
+    if user_id in listed:
+        await ctx.send("ℹ️ Ese usuario ya está en blacklist.")
+        return
+
+    listed.append(user_id)
+    update_guild_settings(ctx.guild.id, {"access": {"blacklist_user_ids": listed}})
+    await ctx.send(f"✅ Usuario `{user_id}` añadido a blacklist.")
+
+
+@bot.command(name="blacklist_remove")
+@commands.has_guild_permissions(manage_guild=True)
+async def blacklist_remove(ctx: commands.Context, user_ref: str) -> None:
+    user_id = parse_user_id(user_ref)
+    if not user_id:
+        await ctx.send("❌ ID inválido. Usa un ID o mención de usuario.")
+        return
+
+    cfg = get_guild_settings(ctx.guild.id)
+    listed = [int(x) for x in cfg["access"].get("blacklist_user_ids", [])]
+    if user_id not in listed:
+        await ctx.send("ℹ️ Ese usuario no está en blacklist.")
+        return
+
+    listed.remove(user_id)
+    update_guild_settings(ctx.guild.id, {"access": {"blacklist_user_ids": listed}})
+    await ctx.send(f"✅ Usuario `{user_id}` eliminado de blacklist.")
+
+
+@bot.command(name="blacklist_list")
+@commands.has_guild_permissions(manage_guild=True)
+async def blacklist_list(ctx: commands.Context) -> None:
+    cfg = get_guild_settings(ctx.guild.id)
+    listed = [int(x) for x in cfg["access"].get("blacklist_user_ids", [])]
+    if not listed:
+        await ctx.send("ℹ️ No hay usuarios en blacklist.")
+        return
+    await ctx.send("🚫 Blacklist actual:\n" + "\n".join(f"• `{uid}`" for uid in listed[:50]))
+
+
+@bot.command(name="blacklist_action")
+@commands.has_guild_permissions(manage_guild=True)
+async def blacklist_action(ctx: commands.Context, accion: str) -> None:
+    accion = accion.lower()
+    if accion not in {"kick", "ban", "none"}:
+        await ctx.send("❌ Acción inválida. Usa: kick, ban o none.")
+        return
+    update_guild_settings(ctx.guild.id, {"access": {"blacklist_action": accion}})
+    await ctx.send(f"✅ Acción para blacklist configurada en: `{accion}`")
+
+
+@bot.command(name="roleadd")
+@commands.has_guild_permissions(manage_roles=True)
+async def roleadd(ctx: commands.Context, rol: discord.Role, objetivo: str) -> None:
+    if objetivo.lower() == "all":
+        count = 0
+        for member in ctx.guild.members:
+            if member.bot or rol in member.roles:
+                continue
+            try:
+                await member.add_roles(rol, reason=f"roleadd all por {ctx.author}")
+                count += 1
+            except discord.Forbidden:
+                continue
+        await ctx.send(f"✅ Rol {rol.mention} agregado a {count} usuarios.")
+        return
+
+    user_id = parse_user_id(objetivo)
+    member = ctx.guild.get_member(user_id)
+    if not member:
+        await ctx.send("❌ Usuario no encontrado. Usa mención o ID válido.")
+        return
+    await member.add_roles(rol, reason=f"roleadd por {ctx.author}")
+    await ctx.send(f"✅ Rol {rol.mention} agregado a {member.mention}.")
+
+
+@bot.command(name="roleremove")
+@commands.has_guild_permissions(manage_roles=True)
+async def roleremove(ctx: commands.Context, rol: discord.Role, objetivo: str) -> None:
+    if objetivo.lower() == "all":
+        count = 0
+        for member in ctx.guild.members:
+            if rol not in member.roles:
+                continue
+            try:
+                await member.remove_roles(rol, reason=f"roleremove all por {ctx.author}")
+                count += 1
+            except discord.Forbidden:
+                continue
+        await ctx.send(f"✅ Rol {rol.mention} removido de {count} usuarios.")
+        return
+
+    user_id = parse_user_id(objetivo)
+    member = ctx.guild.get_member(user_id)
+    if not member:
+        await ctx.send("❌ Usuario no encontrado. Usa mención o ID válido.")
+        return
+    await member.remove_roles(rol, reason=f"roleremove por {ctx.author}")
+    await ctx.send(f"✅ Rol {rol.mention} removido de {member.mention}.")
+
+
+@bot.command(name="checkuser")
+@commands.has_guild_permissions(manage_guild=True)
+async def checkuser(ctx: commands.Context, user_ref: str) -> None:
+    user_id = parse_user_id(user_ref)
+    if not user_id:
+        await ctx.send("❌ ID inválido. Usa mención o ID.")
+        return
+
+    try:
+        user = await bot.fetch_user(user_id)
+    except discord.NotFound:
+        await ctx.send("❌ Usuario no encontrado.")
+        return
+
+    cfg = get_guild_settings(ctx.guild.id)
+    blacklisted = user_id in [int(x) for x in cfg["access"].get("blacklist_user_ids", [])]
+    shared = get_shared_guilds(user_id)
+    age_days = max(0, (discord.utils.utcnow() - user.created_at).days)
+
+    risk = 0
+    if age_days < 7:
+        risk += 60
+    elif age_days < 30:
+        risk += 35
+    if len(shared) >= 5:
+        risk += 20
+    elif len(shared) >= 3:
+        risk += 10
+    if blacklisted:
+        risk += 50
+    risk = min(100, risk)
+
+    if risk >= 80:
+        level = "🔴 Crítico"
+    elif risk >= 50:
+        level = "🟠 Alto"
+    elif risk >= 25:
+        level = "🟡 Medio"
+    else:
+        level = "🟢 Bajo"
+
+    lines = []
+    for guild, member in shared[:8]:
+        joined = discord.utils.format_dt(member.joined_at, "R") if member.joined_at else "desconocido"
+        lines.append(f"• {guild.name} (joined {joined})")
+
+    embed = discord.Embed(title=f"🔍 CheckUser - {user}", color=discord.Color.teal())
+    embed.add_field(name="Discord ID", value=str(user.id), inline=False)
+    embed.add_field(name="Cuenta creada", value=f"{discord.utils.format_dt(user.created_at, 'F')}\n{discord.utils.format_dt(user.created_at, 'R')}", inline=False)
+    embed.add_field(name="Servidores compartidos", value=str(len(shared)), inline=True)
+    embed.add_field(name="Blacklist", value="Sí" if blacklisted else "No", inline=True)
+    embed.add_field(name="Risk score", value=f"{risk}% ({level})", inline=True)
+    embed.add_field(name="Detalle servidores", value="\n".join(lines) if lines else "Sin coincidencias", inline=False)
+    if user.display_avatar:
+        embed.set_thumbnail(url=user.display_avatar.url)
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="config_spam")
@@ -486,6 +736,7 @@ async def verificar(ctx: commands.Context, codigo: str) -> None:
 
     if time.time() > pending["expires_at"]:
         verification_pending.pop(key, None)
+        verification_threads.pop(key, None)
         await ctx.send("❌ Tu captcha expiró. Pide uno nuevo esperando el próximo aviso.")
         return
 
@@ -714,6 +965,33 @@ async def on_member_join(member: discord.Member) -> None:
     cfg = get_guild_settings(member.guild.id)
     now = time.time()
 
+    autorole_id = _safe_int(cfg["access"].get("autorole_id"), 0)
+    if autorole_id:
+        autorole = member.guild.get_role(autorole_id)
+        if autorole:
+            try:
+                await member.add_roles(autorole, reason="Autorole al ingresar")
+            except discord.Forbidden:
+                pass
+
+    await send_join_alert(member, cfg)
+
+    blacklist_ids = [int(x) for x in cfg["access"].get("blacklist_user_ids", [])]
+    if member.id in blacklist_ids:
+        action = str(cfg["access"].get("blacklist_action", "kick")).lower()
+        try:
+            if action == "ban":
+                await member.ban(reason="Ingreso bloqueado por blacklist")
+                await log_mod(member.guild, f"🚫 Usuario {member} baneado al entrar por blacklist.")
+                return
+            if action == "kick":
+                await member.kick(reason="Ingreso bloqueado por blacklist")
+                await log_mod(member.guild, f"🚫 Usuario {member} expulsado al entrar por blacklist.")
+                return
+            await log_mod(member.guild, f"🚫 Usuario {member} está en blacklist (acción=none).")
+        except discord.Forbidden:
+            pass
+
     joins = join_events[member.guild.id]
     joins.append(now)
     while joins and now - joins[0] > cfg["raid"]["window_seconds"]:
@@ -897,6 +1175,16 @@ async def handle_nuke_event(guild: discord.Guild, action_type: discord.AuditLogA
 @setup_proteccion.error
 @estado_proteccion.error
 @set_log.error
+@set_join_alert.error
+@set_autorole.error
+@clear_autorole.error
+@blacklist_add.error
+@blacklist_remove.error
+@blacklist_list.error
+@blacklist_action.error
+@roleadd.error
+@roleremove.error
+@checkuser.error
 @config_spam.error
 @config_spam_tiempos.error
 @config_mentions.error
