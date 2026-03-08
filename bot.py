@@ -86,6 +86,7 @@ join_events: dict[int, deque[float]] = defaultdict(deque)
 nuke_events: dict[tuple[int, int], deque[float]] = defaultdict(deque)
 
 verification_pending: dict[tuple[int, int], dict[str, Any]] = {}
+verification_threads: dict[tuple[int, int], int] = {}
 user_warnings: dict[tuple[int, int], int] = defaultdict(int)
 
 
@@ -464,7 +465,7 @@ async def setup_verificacion(
             }
         },
     )
-    await ctx.send("✅ Verificación activada. Nuevos usuarios deberán usar captcha con `!verificar <codigo>`.")
+    await ctx.send("✅ Verificación activada. Se abrirá un hilo privado en el canal configurado para cada usuario nuevo.")
 
 
 @bot.command(name="verificar")
@@ -500,7 +501,16 @@ async def verificar(ctx: commands.Context, codigo: str) -> None:
 
     try:
         await ctx.author.add_roles(role, reason="Verificación captcha completada")
-        verification_pending.pop(key, None)
+        pending_data = verification_pending.pop(key, None) or {}
+        thread_id = _safe_int(pending_data.get("thread_id"), verification_threads.pop(key, 0))
+        if thread_id:
+            thread = ctx.guild.get_thread(thread_id)
+            if isinstance(thread, discord.Thread):
+                try:
+                    await thread.send(f"✅ {ctx.author.mention} verificación completada.")
+                    await thread.edit(archived=True, locked=True, reason="Verificación completada")
+                except discord.Forbidden:
+                    pass
         await ctx.send("✅ Verificación completada. ¡Bienvenido!")
         await log_mod(ctx.guild, f"✅ {ctx.author} verificado correctamente.")
     except discord.Forbidden:
@@ -527,17 +537,29 @@ async def reenviar_captcha(ctx: commands.Context) -> None:
 
     if time.time() > pending["expires_at"]:
         verification_pending.pop(key, None)
+        verification_threads.pop(key, None)
         await ctx.send("❌ Tu captcha expiró. Espera a que se genere uno nuevo.")
         return
 
+    thread_id = _safe_int(pending.get("thread_id"), verification_threads.get(key, 0))
+    if not thread_id:
+        await ctx.send("⚠️ No encuentro tu hilo privado. Pide a un admin revisar permisos del canal de verificación.")
+        return
+
+    thread = ctx.guild.get_thread(thread_id)
+    if not isinstance(thread, discord.Thread):
+        await ctx.send("⚠️ No encuentro tu hilo privado. Pide a un admin revisar permisos del canal de verificación.")
+        return
+
     try:
-        await ctx.author.send(
-            f"🔐 Tu código de verificación para **{ctx.guild.name}** es: **{pending['code']}**\n"
-            "Ejecuta en el servidor: `!verificar <codigo>`."
+        await thread.send(
+            f"🔐 {ctx.author.mention} tu código es: **{pending['code']}**\n"
+            "Usa en el servidor: `!verificar <codigo>`."
         )
-        await ctx.send("✅ Te reenvié el captcha por mensaje privado.")
+        await ctx.send("✅ Te reenvié el captcha en tu hilo privado de verificación.")
     except discord.Forbidden:
-        await ctx.send("⚠️ No pude enviarte DM. Activa mensajes directos del servidor.")
+        await ctx.send("⚠️ No tengo permisos para escribir en tu hilo privado.")
+
 
 @bot.command(name="emergencia")
 @commands.has_guild_permissions(manage_guild=True)
@@ -706,37 +728,47 @@ async def on_member_join(member: discord.Member) -> None:
     if cfg["verification"]["enabled"]:
         code = generate_captcha_code()
         expiration = now + max(120, _safe_int(cfg["verification"].get("captcha_expire_minutes"), 15) * 60)
-        verification_pending[(member.guild.id, member.id)] = {
-            "code": code,
-            "expires_at": expiration,
-        }
-
-        expire_minutes = _safe_int(cfg["verification"].get("captcha_expire_minutes"), 15)
-        dm_sent = False
-        try:
-            await member.send(
-                f"👋 Bienvenido a **{member.guild.name}**\n"
-                f"Tu código de verificación es: **{code}**\n"
-                f"Ejecuta en el servidor: `!verificar {code}`\n"
-                f"⏳ Expira en {expire_minutes} minutos."
-            )
-            dm_sent = True
-        except discord.Forbidden:
-            dm_sent = False
+        key = (member.guild.id, member.id)
 
         verification_channel_id = _safe_int(cfg["verification"].get("channel_id"), 0)
         channel = member.guild.get_channel(verification_channel_id)
-        if isinstance(channel, discord.TextChannel):
-            if dm_sent:
-                await channel.send(
-                    f"📩 {member.mention} te envié la verificación por DM. "
-                    "Usa el código recibido con `!verificar <codigo>`."
-                )
-            else:
-                await channel.send(
-                    f"⚠️ {member.mention}, no pude enviarte DM. "
-                    "Activa MD de servidor y escribe `!reenviar_captcha` para recibir tu código en privado."
-                )
+        if not isinstance(channel, discord.TextChannel):
+            await log_mod(member.guild, "⚠️ Verificación activa pero el canal configurado no existe.")
+            return
+
+        expire_minutes = _safe_int(cfg["verification"].get("captcha_expire_minutes"), 15)
+        try:
+            thread = await channel.create_thread(
+                name=f"verificacion-{member.name}",
+                type=discord.ChannelType.private_thread,
+                invitable=False,
+                reason="Flujo de verificación privada"
+            )
+            await thread.add_user(member)
+            await thread.send(
+                f"👋 {member.mention}, este es tu hilo privado de verificación.\n"
+                f"Tu código es: **{code}**\n"
+                f"Escribe en el servidor: `!verificar {code}`\n"
+                f"⏳ Expira en {expire_minutes} minutos."
+            )
+            verification_pending[key] = {
+                "code": code,
+                "expires_at": expiration,
+                "thread_id": thread.id,
+            }
+            verification_threads[key] = thread.id
+            await channel.send(f"🔐 {member.mention} se abrió tu hilo privado de verificación.")
+        except discord.Forbidden:
+            verification_pending[key] = {
+                "code": code,
+                "expires_at": expiration,
+                "thread_id": 0,
+            }
+            verification_threads[key] = 0
+            await channel.send(
+                f"⚠️ {member.mention}, no pude crear tu hilo privado de verificación. "
+                "Pide a un admin revisar permisos de hilos del bot."
+            )
 
 
 @bot.event
