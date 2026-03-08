@@ -16,6 +16,7 @@ Bot de moderación avanzada para Discord, inspirado en herramientas tipo Carl-bo
 - ✅ Autorole configurable al ingresar (`!set_autorole`, `!clear_autorole`).
 - ✅ Gestión de roles masiva/manual (`!roleadd`, `!roleremove`, incluyendo `all`).
 - ✅ Sistema de blacklist con acción al entrar (`kick`, `ban` o `none`) y comando `!checkuser`.
+- ✅ Comandos de inspección: `!inspect_lock`, `!inspect_unlock`, `!inspect_announce`.
 - ✅ Comandos de moderación manual: `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!purge`.
 - ✅ Sistema de warns con escalado automático configurable.
 - ✅ Logs de moderación en canal configurable.
@@ -80,6 +81,9 @@ python bot.py
 - `!blacklist_list`
 - `!blacklist_action <kick|ban|none>`
 - `!checkuser <user_id|@usuario>`
+- `!inspect_lock [motivo]`
+- `!inspect_unlock [motivo]`
+- `!inspect_announce <mensaje>`
 - `!config_spam <mensajes> <ventana_segundos> <accion>`
 - `!config_spam_tiempos <timeout_minutos> <tempban_minutos>`
 - `!config_mentions <max_menciones> <accion> <timeout_minutos>`

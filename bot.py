@@ -331,6 +331,8 @@ async def helpmod(ctx: commands.Context) -> None:
 `!blacklist_add <user_id|@user>` / `!blacklist_remove <user_id|@user>`
 `!blacklist_list` / `!blacklist_action <kick|ban|none>`
 `!checkuser <user_id|@user>`
+`!inspect_lock [motivo]` / `!inspect_unlock [motivo]`
+`!inspect_announce <mensaje>`
 `!setup_verificacion <@rol> <#canal> [expira_min]`
 `!verificar <codigo>`
 `!reenviar_captcha`
@@ -556,6 +558,30 @@ async def checkuser(ctx: commands.Context, user_ref: str) -> None:
     if user.display_avatar:
         embed.set_thumbnail(url=user.display_avatar.url)
     await ctx.send(embed=embed)
+
+
+@bot.command(name="inspect_lock")
+@commands.has_guild_permissions(manage_guild=True)
+async def inspect_lock(ctx: commands.Context, *, motivo: str = "Inspección de seguridad") -> None:
+    await set_emergency_mode(ctx.guild, True, reason=f"Inspect lock por {ctx.author} - {motivo}")
+    await ctx.send("🔒 Modo inspección activado: canales bloqueados para @everyone.")
+    await log_mod(ctx.guild, f"🔒 Inspect lock activado por {ctx.author}. Motivo: {motivo}")
+
+
+@bot.command(name="inspect_unlock")
+@commands.has_guild_permissions(manage_guild=True)
+async def inspect_unlock(ctx: commands.Context, *, motivo: str = "Inspección finalizada") -> None:
+    await set_emergency_mode(ctx.guild, False, reason=f"Inspect unlock por {ctx.author} - {motivo}")
+    await ctx.send("🔓 Modo inspección desactivado: canales desbloqueados para @everyone.")
+    await log_mod(ctx.guild, f"🔓 Inspect unlock activado por {ctx.author}. Motivo: {motivo}")
+
+
+@bot.command(name="inspect_announce")
+@commands.has_guild_permissions(manage_guild=True)
+async def inspect_announce(ctx: commands.Context, *, mensaje: str) -> None:
+    text = f"📢 **ANUNCIO DE INSPECCIÓN**\n@everyone\n{mensaje}"
+    await ctx.send(text, allowed_mentions=discord.AllowedMentions(everyone=True))
+    await log_mod(ctx.guild, f"📢 Inspect announce enviado por {ctx.author}: {mensaje}")
 
 
 @bot.command(name="config_spam")
@@ -1185,6 +1211,9 @@ async def handle_nuke_event(guild: discord.Guild, action_type: discord.AuditLogA
 @roleadd.error
 @roleremove.error
 @checkuser.error
+@inspect_lock.error
+@inspect_unlock.error
+@inspect_announce.error
 @config_spam.error
 @config_spam_tiempos.error
 @config_mentions.error
